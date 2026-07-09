@@ -28,8 +28,16 @@ def parse_metadata_files(metadata_text: str) -> list[str]:
         if not isinstance(raw_path, str):
             raise ValueError("metadata file path must be a string")
         path = PurePosixPath(raw_path)
-        if path.is_absolute() or ".." in path.parts or raw_path != path.as_posix():
+        if (
+            "\\" in raw_path
+            or (len(raw_path) >= 2 and raw_path[1] == ":")
+            or path.is_absolute()
+            or ".." in path.parts
+            or raw_path != path.as_posix()
+        ):
             raise ValueError(f"unsafe Raidbots path: {raw_path}")
+        if raw_path == "metadata.json":
+            raise ValueError("metadata file list must not include metadata.json")
         paths.append(raw_path)
 
     if len(paths) != len(set(paths)):
@@ -73,7 +81,9 @@ def build_snapshot(fetch: Callable[[str], bytes], output_dir: Path) -> Path:
         manifest_path = temp_path / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
-        os.replace(archive_path, output_dir / archive_name)
+        archive_destination = output_dir / archive_name
+        os.link(archive_path, archive_destination)
+        archive_path.unlink()
         os.replace(manifest_path, output_dir / "manifest.json")
 
     return output_dir / "manifest.json"
