@@ -7,11 +7,13 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Callable
+from urllib.error import HTTPError
 from urllib.parse import quote
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 RAIDBOTS_DATA_URL = "https://www.raidbots.com/static/data/live"
+USER_AGENT = "WhyLowDps recovery snapshot (+https://github.com/WhyLowDps/whylowdps-game-data)"
 
 
 def sha256(payload: bytes) -> str:
@@ -47,14 +49,29 @@ def parse_metadata_files(metadata_text: str) -> list[str]:
 
 def build_snapshot(fetch: Callable[[str], bytes], output_dir: Path) -> Path:
     metadata = fetch("metadata.json")
+    source_metadata_hash = sha256(metadata)
     paths = parse_metadata_files(metadata.decode("utf-8"))
     payloads = {"metadata.json": metadata}
-    payloads.update({path: fetch(path) for path in paths})
+    unavailable_paths = []
+    for path in paths:
+        try:
+            payloads[path] = fetch(path)
+        except HTTPError as error:
+            if error.code != 404:
+                raise
+            unavailable_paths.append(path)
+            print(f"Skipping unavailable Raidbots file listed by metadata: {path}")
+
+    if unavailable_paths:
+        metadata_payload = json.loads(metadata)
+        metadata_payload["files"] = [path for path in paths if path not in unavailable_paths]
+        payloads["metadata.json"] = (
+            json.dumps(metadata_payload, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    metadata_hash = sha256(metadata)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    archive_name = f"snapshot-{timestamp}-{metadata_hash[:12]}.zip"
+    archive_name = f"snapshot-{timestamp}-{source_metadata_hash[:12]}.zip"
 
     with tempfile.TemporaryDirectory(dir=output_dir.parent) as temp_dir:
         temp_path = Path(temp_dir)
@@ -67,7 +84,7 @@ def build_snapshot(fetch: Callable[[str], bytes], output_dir: Path) -> Path:
         manifest = {
             "schema_version": 1,
             "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "source_metadata_sha256": metadata_hash,
+            "source_metadata_sha256": source_metadata_hash,
             "archive": {
                 "name": archive_name,
                 "sha256": sha256(archive_payload),
@@ -90,7 +107,11 @@ def build_snapshot(fetch: Callable[[str], bytes], output_dir: Path) -> Path:
 
 
 def fetch_raidbots(path: str) -> bytes:
-    with urlopen(f"{RAIDBOTS_DATA_URL}/{quote(path, safe='/')}") as response:
+    request = Request(
+        f"{RAIDBOTS_DATA_URL}/{quote(path, safe='/')}",
+        headers={"User-Agent": USER_AGENT},
+    )
+    with urlopen(request) as response:
         return response.read()
 
 

@@ -1,11 +1,13 @@
 import json
 import tempfile
 import unittest
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import HTTPError
 
-from scripts.build_snapshot import build_snapshot, parse_metadata_files
+from scripts.build_snapshot import build_snapshot, fetch_raidbots, parse_metadata_files
 
 
 class BuildSnapshotTests(unittest.TestCase):
@@ -51,6 +53,35 @@ class BuildSnapshotTests(unittest.TestCase):
             )
 
         self.assertFalse((self.output_dir / "manifest.json").exists())
+
+    def test_build_snapshot_removes_source_listed_404_files_from_metadata(self):
+        source_metadata = b'{"files":["missing.json","items.json"]}'
+
+        def fetch(path):
+            if path == "metadata.json":
+                return source_metadata
+            if path == "missing.json":
+                raise HTTPError("https://example.test/missing.json", 404, "Not Found", None, None)
+            return b"[]"
+
+        manifest = json.loads(build_snapshot(fetch, self.output_dir).read_text())
+        with zipfile.ZipFile(self.output_dir / manifest["archive"]["name"]) as archive:
+            snapshot_metadata = json.loads(archive.read("metadata.json"))
+
+        self.assertEqual(snapshot_metadata["files"], ["items.json"])
+        self.assertEqual({file["path"] for file in manifest["files"]}, {"metadata.json", "items.json"})
+
+    @patch("scripts.build_snapshot.urlopen")
+    def test_fetch_raidbots_sends_identifiable_user_agent(self, mock_urlopen):
+        mock_urlopen.return_value.__enter__.return_value.read.return_value = b"{}"
+
+        self.assertEqual(fetch_raidbots("metadata.json"), b"{}")
+
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(
+            request.get_header("User-agent"),
+            "WhyLowDps recovery snapshot (+https://github.com/WhyLowDps/whylowdps-game-data)",
+        )
 
     @patch("scripts.build_snapshot.datetime")
     def test_archive_collision_preserves_existing_manifest(self, mock_datetime):
