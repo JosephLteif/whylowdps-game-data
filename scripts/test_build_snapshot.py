@@ -8,6 +8,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 
 from scripts.build_snapshot import build_snapshot, fetch_raidbots, parse_metadata_files
+from scripts.validate_snapshot import validate_payloads
 
 
 class BuildSnapshotTests(unittest.TestCase):
@@ -99,6 +100,33 @@ class BuildSnapshotTests(unittest.TestCase):
             )
 
         self.assertEqual((self.output_dir / "manifest.json").read_bytes(), first_manifest)
+
+    def test_validate_snapshot_accepts_current_season_structure(self):
+        validate_payloads(
+            {
+                "seasons.json": [{"id": 37, "active": True, "shortName": "mid2", "itemConversionId": 13}],
+                "instances.json": [
+                    {"id": -1, "type": "dungeon"},
+                    {"id": -98, "type": "delve-mid2"},
+                ],
+                "talents.json": [{"id": 1}],
+                "class-traits.json": [{"skillLine": {"name": "Mage"}}],
+                "bonuses.json": [{"id": 1}],
+                "item-conversions.json": {"13": {"bonusIds": [1]}},
+            }
+        )
+
+    def test_validate_snapshot_rejects_missing_active_season(self):
+        with self.assertRaisesRegex(ValueError, "exactly one active season"):
+            validate_payloads(
+                {
+                    "seasons.json": [],
+                    "instances.json": [{"id": -1, "type": "dungeon"}],
+                    "talents.json": [{}],
+                    "class-traits.json": [{}],
+                    "bonuses.json": [{}],
+                }
+            )
 
 
 if __name__ == "__main__":
